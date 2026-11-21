@@ -149,6 +149,21 @@ object Fmt {
     }
 
     fun pct(p: Double): String = df("0.#").format(p)
+
+    /** A value of any size with about four meaningful digits: 22,369 · 33.94 · 0.9107 · 0.00004471. */
+    fun sig(v: Double): String = when {
+        v >= 1000 -> df("#,##0").format(v)
+        v >= 10 -> df("0.00").format(v)
+        v >= 1 -> df("0.0000").format(v)
+        v <= 0 -> "0"
+        else -> java.math.BigDecimal(v).round(java.math.MathContext(4)).stripTrailingZeros().toPlainString()
+    }
+
+    fun usd(v: Double): String = "$" + df("#,##0.00").format(v)
+
+    /** A price in any currency: "$4.95" or "168.12 THB". */
+    fun money(v: Double, code: String, rates: Rates): String =
+        if (code == HOME) usd(v) else amount(v, code, rates) + " " + code
 }
 
 object CurrencyInfo {

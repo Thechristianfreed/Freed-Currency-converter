@@ -96,9 +96,10 @@ class MainActivity : ComponentActivity() {
             AppTheme {
                 LifecycleResumeEffect(Unit) {
                     vm.refresh(force = false)
+                    vm.refreshPrices(force = false)
                     onPauseOrDispose { vm.store.save() }
                 }
-                ConverterApp(vm.store, vm.refreshing, vm.failed) { vm.refresh(force = true) }
+                ConverterApp(vm)
             }
         }
     }
@@ -117,13 +118,19 @@ fun AppTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composable () -> U
 }
 
 @Composable
-fun ConverterApp(store: ConverterStore, refreshing: Boolean, failed: Boolean, onRefresh: () -> Unit) {
+fun ConverterApp(model: AppModel) {
+    val store = model.store
     var pickerFor by rememberSaveable { mutableStateOf<String?>(null) }
     var showFee by rememberSaveable { mutableStateOf(false) }
+    var tab by rememberSaveable { mutableIntStateOf(0) }
 
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
         val slot = pickerFor
-        if (slot != null) {
+        val chart = model.chart
+        if (chart != null) {
+            BackHandler { model.closeChart() }
+            ChartScreen(model, chart)
+        } else if (slot != null) {
             BackHandler { pickerFor = null }
             CurrencyPicker(
                 store = store,
@@ -133,15 +140,42 @@ fun ConverterApp(store: ConverterStore, refreshing: Boolean, failed: Boolean, on
             )
         } else {
             Column(Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 10.dp)) {
-                TopBar(store, refreshing, failed, onRefresh) { showFee = true }
-                CurrencyRow(store, HOME, Modifier.height(72.dp), onSwap = null)
-                Spacer(Modifier.height(6.dp))
-                SlotList(store, Modifier.weight(1f)) { pickerFor = it }
-                Keypad(store::press)
+                Tabs(tab) { tab = it }
+                if (tab == 0) {
+                    TopBar(store, model.refreshing, model.failed, { model.refresh(force = true) }) { showFee = true }
+                    CurrencyRow(store, HOME, Modifier.height(68.dp), onSwap = null, onChart = null)
+                    Spacer(Modifier.height(4.dp))
+                    SlotList(store, Modifier.weight(1f), onChart = { model.openChart("fx:$it") }) { pickerFor = it }
+                    Keypad(store::press)
+                } else {
+                    PricesTab(model, Modifier.weight(1f))
+                }
             }
         }
     }
     if (showFee) FeeDialog(store) { showFee = false }
+}
+
+@Composable
+private fun Tabs(selected: Int, onSelect: (Int) -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth().padding(top = 4.dp).height(38.dp).clip(RoundedCornerShape(50))
+            .background(scheme.surfaceContainerHigh).padding(3.dp),
+    ) {
+        listOf("Converter", "Prices").forEachIndexed { i, label ->
+            val on = i == selected
+            Box(
+                Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(50))
+                    .background(if (on) scheme.surface else Color.Transparent)
+                    .clickable { onSelect(i) }.testTag("tab-$label"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(label, fontSize = 14.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (on) scheme.onSurface else scheme.onSurfaceVariant)
+            }
+        }
+    }
 }
 
 @Composable
@@ -205,7 +239,7 @@ private fun ago(unixSeconds: Long): String {
 
 /** The eight swappable rows. Long-press a row and drag it up or down to reorder. */
 @Composable
-private fun SlotList(store: ConverterStore, modifier: Modifier, onSwap: (String) -> Unit) {
+private fun SlotList(store: ConverterStore, modifier: Modifier, onChart: (String) -> Unit, onSwap: (String) -> Unit) {
     val haptics = LocalHapticFeedback.current
     var dragCode by remember { mutableStateOf<String?>(null) }
     var dragOffset by remember { mutableFloatStateOf(0f) }
@@ -253,6 +287,7 @@ private fun SlotList(store: ConverterStore, modifier: Modifier, onSwap: (String)
                             )
                         },
                     onSwap = { onSwap(code) },
+                    onChart = { onChart(code) },
                     lifted = dragging,
                 )
             }
@@ -266,6 +301,7 @@ private fun CurrencyRow(
     code: String,
     modifier: Modifier,
     onSwap: (() -> Unit)?,
+    onChart: (() -> Unit)?,
     lifted: Boolean = false,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -292,7 +328,7 @@ private fun CurrencyRow(
     ) {
         Row(
             Modifier
-                .width(176.dp).fillMaxHeight()
+                .width(158.dp).fillMaxHeight()
                 .then(if (onSwap != null) Modifier.clickable(onClick = onSwap).testTag("swap-$code") else Modifier)
                 .padding(start = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -311,7 +347,7 @@ private fun CurrencyRow(
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
-        Column(Modifier.weight(1f).padding(end = 14.dp), horizontalAlignment = Alignment.End) {
+        Column(Modifier.weight(1f).padding(end = if (onChart != null) 2.dp else 14.dp), horizontalAlignment = Alignment.End) {
             BasicText(
                 text = store.amountText(code),
                 modifier = Modifier.fillMaxWidth().testTag("amount-$code"),
@@ -330,6 +366,12 @@ private fun CurrencyRow(
                     fontSize = 11.sp, lineHeight = 13.sp, color = muted, maxLines = 1)
             }
         }
+        if (onChart != null) {
+            Box(
+                Modifier.width(40.dp).fillMaxHeight().clickable(onClick = onChart).testTag("chart-$code"),
+                contentAlignment = Alignment.Center,
+            ) { ChartGlyph(muted, "Show $code history") }
+        }
     }
 }
 
@@ -340,7 +382,7 @@ private fun Keypad(onKey: (String) -> Unit) {
         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         onKey(k)
     }
-    Row(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 8.dp).height(220.dp)) {
+    Row(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 6.dp).height(212.dp)) {
         Column(Modifier.weight(3f)) {
             listOf(listOf("7", "8", "9"), listOf("4", "5", "6"), listOf("1", "2", "3"), listOf("00", "0", "."))
                 .forEach { keys ->

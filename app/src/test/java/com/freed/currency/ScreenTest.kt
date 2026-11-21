@@ -1,6 +1,9 @@
 package com.freed.currency
 
 import android.content.Context
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.click
@@ -36,8 +39,68 @@ class ScreenTest {
         store = ConverterStore(ctx.getSharedPreferences("t", 0), seed)
     }
 
-    private fun show(dark: Boolean = false) = rule.setContent {
-        AppTheme(dark) { ConverterApp(store, refreshing = false, failed = false, onRefresh = {}) }
+    private lateinit var model: FakeModel
+
+    private fun show(dark: Boolean = false) {
+        model = FakeModel(store)
+        rule.setContent { AppTheme(dark) { ConverterApp(model) } }
+    }
+
+    /** Stands in for the real app model: fixed prices and a saved year of THB history, no network. */
+    class FakeModel(override val store: ConverterStore) : AppModel {
+        private val thb = Parse.frankfurter(javaClass.classLoader!!.getResource("thb_1y.json")!!.readText(), "THB")
+        private val seed = Parse.fromJson(
+            ApplicationProvider.getApplicationContext<Context>().assets.open("seed_prices.json").bufferedReader().readText())
+        override val refreshing = false
+        override val failed = false
+        override fun refresh(force: Boolean) {}
+        override val pricesBusy = false
+        override val pricesMissing = emptyList<String>()
+        override fun latest(item: Item): Point? = when (item.feed) {
+            Feed.METAL -> Point(20778, if (item.ref == "XAU") 3653.45 else 44.76)
+            Feed.OIL -> Point(20774, 89.53)
+            Feed.BLS -> seed[item.ref]?.lastOrNull()
+        }
+        override fun refreshPrices(force: Boolean) {}
+        override var chart by mutableStateOf<ChartUi?>(null)
+        override fun openChart(key: String) { chart = series(key, Span.Y1) }
+        override fun setSpan(span: Span) { chart = series(chart!!.key, span) }
+        override fun closeChart() { chart = null }
+        private fun series(key: String, span: Span): ChartUi {
+            val item = Catalog.byId(key.substringAfter(':'))
+            val pts = if (item == null) thb else seed[item.ref].orEmpty().takeLast(span.months.toInt() + 1)
+            return ChartUi(key, span, loading = false, points = pts)
+        }
+    }
+
+    @Test fun graphOpensFromRowButtonAndScrubs() {
+        show()
+        rule.onNodeWithTag("chart-THB").performClick()
+        rule.onNodeWithTag("chart-value").assertTextEquals("33.90 THB")
+        rule.onRoot().captureRoboImage("build/shots/chart-fx.png")
+        rule.onNodeWithTag("chart").performTouchInput { down(Offset(1f, height / 2f)) }
+        rule.onNodeWithTag("chart-value").assertTextEquals("32.44 THB")
+        rule.onNodeWithTag("chart-sub").assertTextEquals("Nov 19, 2025")
+        rule.onNodeWithTag("chart").performTouchInput { up() }
+        rule.onNodeWithTag("chart-flip").performClick()
+        rule.onNodeWithTag("chart-value").assertTextEquals("0.0295 USD")
+        rule.onNodeWithTag("span-5Y").performClick()
+        assertEquals(Span.Y5, model.chart!!.span)
+        rule.onNodeWithTag("chart-close").performClick()
+        rule.onNodeWithTag("row-THB").assertExists()
+    }
+
+    @Test fun pricesTabConvertsAndOpensGraph() {
+        show(dark = true)
+        rule.onNodeWithTag("tab-Prices").performClick()
+        rule.onNodeWithTag("price-gold").assertExists()
+        rule.onRoot().captureRoboImage("build/shots/prices-usd.png")
+        rule.onNodeWithTag("showin-THB").performClick()
+        rule.onRoot().captureRoboImage("build/shots/prices-thb.png")
+        rule.onNodeWithTag("price-eggs").performClick()
+        assertEquals("item:eggs", model.chart!!.key)
+        rule.onNodeWithTag("span-10Y").performClick()
+        rule.onRoot().captureRoboImage("build/shots/chart-eggs.png")
     }
 
     private fun type(keys: String) = keys.forEach { rule.onNodeWithTag("key-$it").performClick() }

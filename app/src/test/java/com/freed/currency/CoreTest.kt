@@ -72,4 +72,45 @@ class CoreTest {
         assertFalse(b.perUsd.containsKey("XAU"))
         assertEquals(1795219200L, b.asOf)
     }
+
+    @Test fun readsHistoryFormats() {
+        val fx = Parse.frankfurter(javaClass.classLoader!!.getResource("thb_1y.json")!!.readText(), "THB")
+        assertTrue(fx.size > 50)
+        assertEquals(java.time.LocalDate.of(2025, 11, 19).toEpochDay(), fx.first().day)
+        assertEquals(32.437, fx.first().v, 0.0)
+
+        val oil = Parse.csv("Date,Price\n2026-11-16,89.24\n2026-11-17,89.53\n2026-11-18,.\n\n1986-01-02,25.56\n",
+            java.time.LocalDate.of(2016, 1, 1).toEpochDay())
+        assertEquals(listOf(89.24, 89.53), oil.map { it.v })
+
+        val bls = Parse.bls("""{"status":"REQUEST_SUCCEEDED","responseTime":90,"message":[],"Results":{"series":[
+            {"seriesID":"APU0000708111","data":[
+              {"year":"2026","period":"M10","periodName":"October","value":"3.512","footnotes":[{}]},
+              {"year":"2026","period":"M09","periodName":"September","value":"-","footnotes":[{}]},
+              {"year":"2026","period":"M08","periodName":"August","value":"3.590","footnotes":[{}]},
+              {"year":"2025","period":"M13","periodName":"Annual","value":"4.1","footnotes":[{}]}]}]}}""")
+        val eggs = bls.getValue("APU0000708111")
+        assertEquals(listOf(3.590, 3.512), eggs.map { it.v })
+        assertEquals(java.time.LocalDate.of(2026, 10, 1).toEpochDay(), eggs.last().day)
+
+        val merged = Parse.merge(listOf(Point(1, 1.0), Point(2, 2.0)), listOf(Point(2, 9.0), Point(3, 3.0)))
+        assertEquals(listOf(1.0, 9.0, 3.0), merged.map { it.v })
+        assertEquals(mapOf("a" to merged), Parse.fromJson(Parse.toJson(mapOf("a" to merged))))
+    }
+
+    @Test fun pricesStartFromBundledHistoryAndTakeUpdates() {
+        val cache = PriceCache(null, mapOf("APU0000708111" to listOf(Point(10, 4.0), Point(40, 4.9))))
+        assertEquals(4.9, cache.series("eggs").last().v, 0.0)
+        cache.put(mapOf("eggs" to listOf(Point(40, 5.0), Point(70, 3.5))))
+        assertEquals(listOf(4.0, 5.0, 3.5), cache.series("eggs").map { it.v })
+    }
+
+    @Test fun compactNumbers() {
+        assertEquals("22,369", Fmt.sig(22368.7))
+        assertEquals("33.94", Fmt.sig(33.944))
+        assertEquals("0.9107", Fmt.sig(0.910749))
+        assertEquals("0.00004471", Fmt.sig(0.0000447054))
+        assertEquals("$4,097.74", Fmt.usd(4097.74))
+        assertEquals("168.12 THB", Fmt.money(168.12, "THB", rates))
+    }
 }

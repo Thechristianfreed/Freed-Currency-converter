@@ -138,28 +138,3 @@ object RatesApi {
         }
     }
 }
-
-class MainViewModel(app: Application) : AndroidViewModel(app) {
-    val store = ConverterStore(
-        app.getSharedPreferences("converter", 0),
-        Rates.fromErApi(app.assets.open("seed_rates.json").bufferedReader().use { it.readText() }, 0),
-    )
-    var refreshing by mutableStateOf(false)
-        private set
-    var failed by mutableStateOf(false)
-        private set
-
-    /** Rates change once a day, so only re-download when ours are a few hours old (or on request). */
-    fun refresh(force: Boolean) {
-        if (refreshing) return
-        val age = System.currentTimeMillis() / 1000 - store.rates.fetchedAt
-        if (!force && age < 4 * 3600) return
-        refreshing = true
-        viewModelScope.launch {
-            val result = withContext(Dispatchers.IO) { runCatching { RatesApi.fetch() } }
-            result.onSuccess { store.updateRates(it) }
-            failed = result.isFailure
-            refreshing = false
-        }
-    }
-}
