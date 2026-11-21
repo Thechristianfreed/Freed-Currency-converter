@@ -152,6 +152,8 @@ object Http {
 object Feeds {
     private const val FRANK = "https://api.frankfurter.dev/v2/rates"
     private const val BLS = "https://api.bls.gov/publicAPI/v1/timeseries/data/"
+    private const val MIRROR =
+        "https://raw.githubusercontent.com/Thechristianfreed/Freed-Currency-converter/HEAD/data/grocery-prices.json"
 
     /** How many [quote] one [base] bought over time, e.g. base USD, quote THB. */
     fun history(base: String, quote: String, span: Span): List<Point> {
@@ -170,12 +172,18 @@ object Feeds {
 
     fun oil(url: String): List<Point> = Parse.csv(Http.get(url), Span.Y10.startDay() - 40)
 
-    /** The free tier allows ten years and 25 series per request, which covers everything we list. */
-    fun bls(ids: List<String>): Map<String, List<Point>> {
+    /**
+     * Grocery and gasoline prices, keyed by BLS series number. A daily job in this app's GitHub
+     * repository keeps a copy of the official figures, which is far more reliable to reach from a
+     * phone than the government service itself; that service is only the fallback.
+     */
+    fun groceries(ids: List<String>): Map<String, List<Point>> = try {
+        Parse.fromJson(Http.get(MIRROR)).also { require(it.isNotEmpty()) }
+    } catch (e: Exception) {
         val year = LocalDate.now().year
         val body = JSONObject().put("seriesid", JSONArray(ids))
             .put("startyear", (year - 9).toString()).put("endyear", year.toString())
-        return Parse.bls(Http.postJson(BLS, body.toString()))
+        Parse.bls(Http.postJson(BLS, body.toString()))
     }
 }
 

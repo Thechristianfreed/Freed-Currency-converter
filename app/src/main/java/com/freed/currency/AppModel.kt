@@ -96,11 +96,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app), AppModel {
                 val oil = Catalog.all.filter { it.feed == Feed.OIL }
                 if (oil.map { o -> runCatching { cache.put(mapOf(o.id to Feeds.oil(o.ref))) }.isFailure }.any { it }) missing += "oil"
 
-                // Grocery figures come out monthly and the free service allows 25 requests a day, so ask sparingly.
+                // Grocery figures only change monthly, so there is no point asking more than a few times a day.
                 val bls = Catalog.all.filter { it.feed == Feed.BLS }
-                if (now - prefs.getLong("blsAt", 0) > (if (force) 600 else 20 * 3600)) {
+                if (now - prefs.getLong("blsAt", 0) > (if (force) 60 else 6 * 3600)) {
                     runCatching {
-                        val got = Feeds.bls(bls.map { it.ref })
+                        val got = Feeds.groceries(bls.map { it.ref })
                         cache.put(bls.mapNotNull { b -> got[b.ref]?.let { b.id to it } }.toMap())
                         prefs.edit().putLong("blsAt", now).apply()
                     }.onFailure { missing += "groceries" }
@@ -148,6 +148,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app), AppModel {
         if (item.feed == Feed.METAL) return Feeds.history(item.ref, HOME, span)
         val from = span.startDay()
         if (item.feed == Feed.OIL && cache.series(item.id).size < 2) cache.put(mapOf(item.id to Feeds.oil(item.ref)))
-        return cache.series(item.id).filter { it.day >= from }
+        val all = cache.series(item.id)
+        // Monthly figures would leave the shortest ranges nearly empty, so always show the last few months.
+        return all.filter { it.day >= from }.let { if (it.size >= 4) it else all.takeLast(4) }
     }
 }

@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
-"""Download US average retail prices from the Bureau of Labor Statistics and
-merge them into data/grocery-prices.json, the file the app reads.
+"""Download US average retail prices and merge them into data/grocery-prices.json,
+the file the app reads.
+
+Source: FRED (Federal Reserve Bank of St. Louis), which republishes the Bureau of
+Labor Statistics average price series. Needs a free API key in FRED_API_KEY.
 
 Format: {"<BLS series id>": [[days since 1970-01-01, price in USD], ...]}
 """
 import datetime
 import json
+import os
 import sys
+import urllib.parse
 import urllib.request
 
 OUT = "data/grocery-prices.json"
-API = "https://api.bls.gov/publicAPI/v1/timeseries/data/"
+API = "https://api.stlouisfed.org/fred/series/observations"
 SERIES = [
     "APU0000703112", "APU0000709112", "APU0000708111", "APU0000706111", "APU0000FF1101",
     "APU0000715211", "APU0000701111", "APU0000702111", "APU0000701312", "APU0000FS1101",
@@ -19,43 +24,46 @@ SERIES = [
 EPOCH = datetime.date(1970, 1, 1)
 
 
-def main():
-    year = datetime.date.today().year
-    body = json.dumps({"seriesid": SERIES, "startyear": str(year - 9), "endyear": str(year)}).encode()
-    req = urllib.request.Request(API, data=body, headers={
-        "Content-Type": "application/json",
-        "User-Agent": "currency-converter-price-updater (GitHub Actions)",
+def fetch(series, key, start):
+    query = urllib.parse.urlencode({
+        "series_id": series, "api_key": key, "file_type": "json", "observation_start": start.isoformat(),
     })
-    with urllib.request.urlopen(req, timeout=60) as r:
-        reply = json.load(r)
-    if reply.get("status") != "REQUEST_SUCCEEDED":
-        sys.exit("BLS refused the request: %s" % reply.get("message"))
+    try:
+        with urllib.request.urlopen(API + "?" + query, timeout=60) as r:
+            rows = json.load(r)["observations"]
+    except Exception as e:  # never print the URL: it contains the key
+        sys.exit("Could not download %s: %s" % (series, type(e).__name__))
+    points = {}
+    for row in rows:
+        try:
+            value = float(row["value"])  # "." marks a month with no published figure
+        except ValueError:
+            continue
+        if value > 0:
+            points[(datetime.date.fromisoformat(row["date"]) - EPOCH).days] = value
+    return points
 
+
+def main():
+    key = os.environ.get("FRED_API_KEY", "").strip()
+    if not key:
+        print("::warning::FRED_API_KEY is not set, so prices were not updated.")
+        return
+
+    today = datetime.date.today()
+    start = datetime.date(today.year - 12, 1, 1)
     with open(OUT) as f:
         data = {k: {int(d): v for d, v in pts} for k, pts in json.load(f).items()}
 
-    newest = None
-    for s in reply["Results"]["series"]:
-        pts = data.setdefault(s["seriesID"], {})
-        for row in s["data"]:
-            period = row["period"]
-            try:
-                month, value = int(period[1:]), float(row["value"])
-            except ValueError:
-                continue  # "-" marks a month with no published figure
-            if not period.startswith("M") or not 1 <= month <= 12 or value <= 0:
-                continue
-            day = datetime.date(int(row["year"]), month, 1)
-            pts[(day - EPOCH).days] = value
-            newest = max(newest or day, day)
+    for series in SERIES:
+        data.setdefault(series, {}).update(fetch(series, key, start))
 
-    if newest is None:
-        sys.exit("BLS returned no usable prices")
-    cutoff = (datetime.date(year - 12, 1, 1) - EPOCH).days
+    cutoff = (start - EPOCH).days
     out = {k: [[d, v] for d, v in sorted(pts.items()) if d >= cutoff] for k, pts in sorted(data.items())}
+    newest = max(pts[-1][0] for pts in out.values() if pts)
     with open(OUT, "w") as f:
         json.dump(out, f, separators=(",", ":"))
-    print("Newest month:", newest.strftime("%B %Y"), "| series:", len(out))
+    print("Newest month:", (EPOCH + datetime.timedelta(days=newest)).strftime("%B %Y"), "| series:", len(out))
 
 
 if __name__ == "__main__":

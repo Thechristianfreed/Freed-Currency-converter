@@ -19,6 +19,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Download latest prices
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
         run: python3 tools/fetch_prices.py
       - name: Save if anything changed
         run: |
